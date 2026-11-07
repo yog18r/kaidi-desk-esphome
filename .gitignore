@@ -1,0 +1,10 @@
+# Never commit real secrets or ESPHome build output
+secrets.yaml
+.esphome/
+# Python
+__pycache__/
+*.pyc
+# OS clutter
+.DS_Store
+Thumbs.db
+desktop.ini
