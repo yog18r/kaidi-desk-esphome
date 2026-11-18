@@ -96,6 +96,19 @@ The `allowance` makes the script press Stop early, because the desk keeps travel
 
 For the four saved heights, the **Preset 1–4** buttons are simpler and exact: the control box drives to its stored height and stops by itself. Save presets on the handset as usual (**S**, then **1–4**).
 
+### Automations that move the desk
+
+The board never moves the desk by itself: it moves only when a button is pressed or a script runs. If you make an automation that moves it on a schedule or a trigger, add a condition so it only runs when someone is at the desk, for example a presence sensor or your PC being on:
+
+```yaml
+conditions:
+  - condition: state
+    entity_id: binary_sensor.your_presence_sensor
+    state: "on"
+```
+
+The desk's anti-collision stays active, but don't rely on it to protect a shelf or a chair left in the way.
+
 ## Diagnostics (entity category "diagnostic")
 
 | Entity | Use |
