@@ -27,7 +27,7 @@ The four memory presets work directly from Home Assistant. Any other height ("go
 
 > **Status:** V3 boards have been built and tested on a real desk (KDDY094, November 2026).
 
-**Known behaviour.** During testing there was an unexplained edge case: on a handful of occasions the control box clicked more than the usual once as it went back to sleep. No harmful behaviour was seen beyond that, and it couldn't be reproduced. On one of those occasions the handset had stopped responding with its screen dark, and unplugging and replugging the handset cleared it.
+**Known behaviour.** During testing there was an unexplained edge case: on a handful of occasions the control box clicked more than the usual once as it went back to sleep. No harmful behaviour was seen beyond that, and it couldn't be reproduced. On one of those occasions the handset had stopped responding with its screen dark, and unplugging and replugging the handset cleared it. Firmware 1.2 adds a **Handset not responding** sensor that turns on if this happens.
 
 ---
 
@@ -75,6 +75,10 @@ Protocol work built on these earlier projects:
 - [xvzf/kaidi-desk-controller-protocol](https://github.com/xvzf/kaidi-desk-controller-protocol)
 - [TillFleisch/ESPHomeGenericSitStandDesk](https://github.com/TillFleisch/ESPHomeGenericSitStandDesk)
 - the [Home Assistant community desk thread](https://community.home-assistant.io/t/desky-standing-desk-esphome-works-with-desky-uplift-jiecang-assmann-others/383790)
+
+## Related projects
+
+- [clintval/esphome-kaidi-desk](https://github.com/clintval/esphome-kaidi-desk): a separate USB-powered board and ESPHome component for the same KDDY094 control box, built around an ESP32-C3.
 
 ## Licence and commercial use
 

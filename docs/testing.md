@@ -17,7 +17,7 @@ USB and the desk cable must never be connected at the same time: the desk cable 
 
 | # | Check | Expected |
 |---|---|---|
-| B1 | Flash `desk.yaml` over USB | Log shows `desk controller firmware 1.1` |
+| B1 | Flash `desk.yaml` over USB | Log shows `desk controller firmware 1.2` |
 | B2 | **Unplug USB** before connecting the desk cable | |
 
 ## C. First power-up on the desk (handset unplugged)
@@ -38,7 +38,7 @@ USB and the desk cable must never be connected at the same time: the desk cable 
 | # | Check | Expected |
 |---|---|---|
 | D1 | Handset Up / Down / preset | Works exactly as without the board. **Desk moving** is on while it moves and turns off about a second after it stops. |
-| D2 | Wake the handset | **Handset in use** turns on, and off when its screen goes off |
+| D2 | Wake the handset | **Handset in use** turns on, and off when its screen goes off. **Handset not responding** stays off. |
 | D3 | Home Assistant Up, then press a handset button mid-move | The desk follows the handset immediately. Last move result: `handset took over`. |
 | D4 | Wake the handset, then Home Assistant Up | Starts within about 0.2 s, no twitch. Log: `(box already awake)`. |
 | D5 | Leave it idle | The box and handset go to sleep as normal (relay clicks off) |

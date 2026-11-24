@@ -26,7 +26,7 @@ esphome:
         gpio_reset_pin(GPIO_NUM_19);
         gpio_set_direction(GPIO_NUM_19, GPIO_MODE_OUTPUT);
         gpio_set_level(GPIO_NUM_19, 0);
-    - logger.log: "desk controller firmware 1.1 (board V3: TX 17, RX 16, T10 drive 4, T10 sense 21, T7 switch 19, handset RX 18)"
+    - logger.log: "desk controller firmware 1.2 (board V3: TX 17, RX 16, T10 drive 4, T10 sense 21, T7 switch 19, handset RX 18)"
 
 esp32:
   # Any 38-pin ESP32-DevKitC-style board (2 x 19 pins at 25.4 mm, WROOM-32 / WROOM-32E) should work: the
@@ -148,7 +148,15 @@ globals:
   - id: move_start
     type: uint32_t
     initial_value: '0'
-  - id: tail_until
+  # the short run of idle frames after a move: when it started and how long it lasts (0 = not running)
+  - id: tail_start
+    type: uint32_t
+    initial_value: '0'
+  - id: tail_ms
+    type: uint32_t
+    initial_value: '0'
+  # when the handset last sent a valid frame (it sends one every ~14 ms while awake)
+  - id: handset_frame_ms
     type: uint32_t
     initial_value: '0'
   # when we started sending the command, and the position at that moment
@@ -201,7 +209,8 @@ script:
       - lambda: |-
           if (id(move_dir) != 0) {
             id(move_dir) = 0;
-            id(tail_until) = millis() + 500;
+            id(tail_start) = millis();
+            id(tail_ms) = 500;
             id(last_stop).publish_state("stopped");
           }
           ESP_LOGI("desk", "stop at %d mm", id(cur_raw) < 0 ? -1 : id(cur_raw) + 711);
@@ -259,8 +268,9 @@ binary_sensor:
     name: "Desk moving"
     # On while we're running a move, or the height changed in the last 1.2 s (handset moves and coasting).
     lambda: |-
-      return id(move_dir) != 0
-             || (id(height_changed_ms) != 0 && millis() - id(height_changed_ms) < 1200);
+      if (id(height_changed_ms) != 0 && millis() - id(height_changed_ms) >= 1200)
+        id(height_changed_ms) = 0;
+      return id(move_dir) != 0 || id(height_changed_ms) != 0;
   # T10 as read through R18/R19 (no internal pull: it would upset the divider)
   - platform: gpio
     id: t10_sense
@@ -276,6 +286,20 @@ binary_sensor:
     lambda: return id(t10_sense).state && !id(t10_driven);
     filters:
       - delayed_on: 50ms
+  # On when the handset's awake line (T10) is high but the handset has sent nothing for about 5 s. An awake
+  # handset sends a frame every ~14 ms, so this means it has stopped responding: unplug it and plug it back in.
+  - platform: template
+    name: "Handset not responding"
+    device_class: problem
+    entity_category: diagnostic
+    lambda: |-
+      return id(t10_sense).state && !id(t10_driven) && millis() - id(handset_frame_ms) > 3000;
+    filters:
+      - delayed_on: 2s
+    on_press:
+      - logger.log:
+          level: WARN
+          format: "handset is awake but silent - unplug the handset and plug it back in"
 
 # The box sends `68 01 00 HI LO SUM 16` on T8 every ~25ms while awake (live during movement)
 # and for ~12s after the handset sleeps. Junk bytes can sit between frame bytes, so on each
@@ -377,6 +401,7 @@ interval:
               continue;
             if (buf[5] != (uint8_t) (0x01 + buf[2] + buf[3] + buf[4]))
               continue;
+            id(handset_frame_ms) = millis();
             int cmd = buf[2];
             int mm = buf[3] | (buf[4] << 8);
             int buf_b3 = buf[3], buf_b4 = buf[4];
@@ -418,7 +443,8 @@ interval:
                 snprintf(what, sizeof(what), "set sensitivity G-%d", buf_b4);
                 if (buf_b4 >= 1 && buf_b4 <= 4) id(collision_sensitivity).publish_state(buf_b4);
               } else snprintf(what, sizeof(what), "other (cmd %d, %d %d)", cmd, buf_b3, buf_b4);
-              ESP_LOGI("desk", "handset: %s at %d mm", what, id(cur_raw) < 0 ? -1 : id(cur_raw) + 711);
+              if (id(cur_raw) < 0) ESP_LOGI("desk", "handset: %s (height not known yet)", what);
+              else ESP_LOGI("desk", "handset: %s at %d mm", what, id(cur_raw) + 711);
               id(handset_button).publish_state(what);
             }
 
@@ -426,7 +452,7 @@ interval:
               ESP_LOGI("desk", "handset button (cmd %d): handing back at %d mm", cmd,
                        id(cur_raw) < 0 ? -1 : id(cur_raw) + 711);
               id(move_dir) = 0;
-              id(tail_until) = millis();
+              id(tail_ms) = 0;
               gpio_set_level(GPIO_NUM_4, 0);
               gpio_set_level(GPIO_NUM_19, 0);
               id(t10_driven) = false;
@@ -460,7 +486,10 @@ interval:
     then:
       - lambda: |-
           uint32_t now = millis();
-          bool want_t10 = id(move_dir) != 0 || now < id(tail_until);
+          // (times are compared as "now - start", which stays correct when millis() wraps after 49.7 days)
+          if (id(tail_ms) != 0 && now - id(tail_start) >= id(tail_ms))
+            id(tail_ms) = 0;
+          bool want_t10 = id(move_dir) != 0 || id(tail_ms) != 0;
           if (want_t10 != id(t10_driven)) {
             gpio_set_level(GPIO_NUM_19, want_t10 ? 1 : 0);
             gpio_set_level(GPIO_NUM_4, want_t10 ? 1 : 0);
@@ -537,7 +566,8 @@ interval:
             }
             if (why) {
               id(move_dir) = 0;
-              id(tail_until) = handset ? now : now + 500;
+              id(tail_start) = now;
+              id(tail_ms) = handset ? 0 : 500;
               if (handset) {
                 // let go of the wire straight away; the handset is driving the desk now
                 gpio_set_level(GPIO_NUM_4, 0);
@@ -552,7 +582,7 @@ interval:
                        id(cur_raw) < 0 ? -1 : id(cur_raw) + 711, id(box_status));
               id(last_stop).publish_state(why);
             }
-          } else if (now >= id(tail_until)) {
+          } else if (id(tail_ms) == 0) {
             return;
           }
           uint8_t frame[7] = {0x68, 0x01, cmd, 0x00, 0x00, (uint8_t) (0x01 + cmd), 0x16};

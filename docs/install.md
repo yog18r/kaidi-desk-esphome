@@ -14,7 +14,7 @@ You need Home Assistant with the **ESPHome Device Builder** add-on (or ESPHome o
    4. **Only then** reconnect the desk cable.
 5. After that, updates can go over Wi-Fi (**Install → Wirelessly**). A failed wireless update is harmless: the ESP32 keeps running its old firmware. If updates keep failing, use USB as in step 4.
 
-Check it's running: the log shows `desk controller firmware 1.1` after each boot.
+Check it's running: the log shows `desk controller firmware 1.2` after each boot.
 
 ### Why the processor runs at 80 MHz
 
@@ -115,6 +115,7 @@ The desk's anti-collision stays active, but don't rely on it to protect a shelf 
 |---|---|
 | Raw position | mm above the desk's lowest position |
 | Collision sensitivity | The anti-collision level G-1 to G-4, read when the handset's sensitivity menu is used |
+| Handset not responding | On when the handset is awake but has sent nothing for about 5 seconds. Unplug the handset and plug it back in. |
 | Uptime | Time since the ESP32 last started. If it drops back to near 0 without an update or restart, the ESP32 restarted by itself (usually a dip in the desk's 5 V). |
 | Desk status | 0 normally. 48 means the box reports **E04**: hold **Up + Down** on the handset and **don't let go** until the desk has gone to its lowest position and finished its rebound. Letting go early can damage the motor. |
 | Restart | Restarts the ESP32 |
