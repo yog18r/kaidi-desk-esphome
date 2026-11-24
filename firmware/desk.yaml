@@ -33,7 +33,7 @@ esphome:
           id(min_limit_raw) = 0;
           id(max_limit_raw) = 440;
         }
-    - logger.log: "desk controller firmware 1.3 (board V3: TX 17, RX 16, T10 drive 4, T10 sense 21, T7 switch 19, handset RX 18)"
+    - logger.log: "desk controller firmware 1.4 (board V3: TX 17, RX 16, T10 drive 4, T10 sense 21, T7 switch 19, handset RX 18)"
 
 esp32:
   # Any 38-pin ESP32-DevKitC-style board (2 x 19 pins at 25.4 mm, WROOM-32 / WROOM-32E) should work: the
@@ -166,6 +166,16 @@ globals:
   - id: handset_frame_ms
     type: uint32_t
     initial_value: '0'
+  # anti-collision level G-1..G-4 last seen in the handset's sensitivity menu (0 = never seen). Kept across
+  # restarts, because the box only reports it while that menu is open.
+  - id: sens_level
+    type: int
+    restore_value: true
+    initial_value: '0'
+  # true while the start-up read is running: the box is woken just to report its height, and nothing is moved
+  - id: wake_only
+    type: bool
+    initial_value: 'false'
   # "Target height" moves: the height we're going to (raw, mm above minimum), -1 = not a target move
   - id: target_raw
     type: int
@@ -233,6 +243,7 @@ script:
           // awake box would twitch the desk)
           id(quick_start) = id(t10_driven) || id(t10_sense).state;
           id(move_dir) = dir;
+          id(wake_only) = false;
           id(target_raw) = -1;
           id(learn_dir) = 0;
           id(move_start) = millis();
@@ -251,6 +262,7 @@ script:
           int t = raw < 0 ? 0 : (raw > 460 ? 460 : raw);
           id(quick_start) = id(t10_driven) || id(t10_sense).state;
           id(target_raw) = t;
+          id(wake_only) = false;
           id(learn_dir) = 0;
           id(move_dir) = (id(cur_raw) >= 0 && t < id(cur_raw)) ? 2 : 1;
           id(move_start) = millis();
@@ -265,7 +277,8 @@ script:
             id(move_dir) = 0;
             id(tail_start) = millis();
             id(tail_ms) = 500;
-            id(last_stop).publish_state("stopped");
+            if (!id(wake_only)) id(last_stop).publish_state("stopped");
+            id(wake_only) = false;
           }
           ESP_LOGI("desk", "stop at %d mm", id(cur_raw) < 0 ? -1 : id(cur_raw) + 711);
 
@@ -294,7 +307,7 @@ sensor:
     entity_category: diagnostic
     accuracy_decimals: 0
   # Anti-collision sensitivity G-1..G-4, as shown in the handset's sensitivity menu (hold S, press 3).
-  # Unknown until that menu is opened once.
+  # Unknown until that menu has been opened once; remembered after that.
   - platform: template
     name: "Collision sensitivity"
     id: collision_sensitivity
@@ -321,10 +334,11 @@ binary_sensor:
   - platform: template
     name: "Desk moving"
     # On while we're running a move, or the height changed in the last 1.2 s (handset moves and coasting).
+    # The start-up read doesn't count: it wakes the box without moving the desk.
     lambda: |-
       if (id(height_changed_ms) != 0 && millis() - id(height_changed_ms) >= 1200)
         id(height_changed_ms) = 0;
-      return id(move_dir) != 0 || id(height_changed_ms) != 0;
+      return (id(move_dir) != 0 && !id(wake_only)) || id(height_changed_ms) != 0;
   # T10 as read through R18/R19 (no internal pull: it would upset the divider)
   - platform: gpio
     id: t10_sense
@@ -416,8 +430,10 @@ interval:
             }
             // While the handset is in a settings menu the box sends other statuses (e.g. 0x62 = 98) with the
             // setting's value where the height normally is. Only 0 (normal) and 0x30 (E04) frames carry a height.
-            if (status == 0x62 && found >= 1 && found <= 4)
-              id(collision_sensitivity).publish_state(found);  // sensitivity menu: current level G-1..G-4
+            if (status == 0x62 && found >= 1 && found <= 4 && found != id(sens_level)) {
+              id(sens_level) = found;  // sensitivity menu: current level G-1..G-4
+              id(collision_sensitivity).publish_state(found);
+            }
             if (status != 0 && status != 0x30)
               continue;
 
@@ -455,6 +471,15 @@ interval:
     then:
       - lambda: |-
           static int last_cmd = -1;
+          static bool first_run = true;
+          if (first_run) {
+            // just started: no handset frame yet means no button is pressed, and the anti-collision level is
+            // whatever the sensitivity menu last showed
+            first_run = false;
+            id(handset_button).publish_state("idle");
+            if (id(sens_level) >= 1 && id(sens_level) <= 4)
+              id(collision_sensitivity).publish_state(id(sens_level));
+          }
           auto &buf = id(handset_buf);
           uint8_t b;
           while (id(handset_uart).available()) {
@@ -508,7 +533,10 @@ interval:
                 snprintf(what, sizeof(what), "sensitivity menu");
               } else if (cmd == 0x19) {
                 snprintf(what, sizeof(what), "set sensitivity G-%d", buf_b4);
-                if (buf_b4 >= 1 && buf_b4 <= 4) id(collision_sensitivity).publish_state(buf_b4);
+                if (buf_b4 >= 1 && buf_b4 <= 4 && buf_b4 != id(sens_level)) {
+                  id(sens_level) = buf_b4;
+                  id(collision_sensitivity).publish_state(buf_b4);
+                }
               } else snprintf(what, sizeof(what), "other (cmd %d, %d %d)", cmd, buf_b3, buf_b4);
               if (id(cur_raw) < 0) ESP_LOGI("desk", "handset: %s (height not known yet)", what);
               else ESP_LOGI("desk", "handset: %s at %d mm", what, id(cur_raw) + 711);
@@ -523,7 +551,8 @@ interval:
               gpio_set_level(GPIO_NUM_4, 0);
               gpio_set_level(GPIO_NUM_19, 0);
               id(t10_driven) = false;
-              id(last_stop).publish_state("handset took over");
+              if (!id(wake_only)) id(last_stop).publish_state("handset took over");
+              id(wake_only) = false;
             }
           }
 
@@ -571,6 +600,25 @@ interval:
     then:
       - lambda: |-
           uint32_t now = millis();
+          // Start-up read: 5 s after boot, if the box hasn't reported a height (it's asleep) and nobody is using
+          // the desk, wake it once so the height and status are known. This is the usual wake sequence with no
+          // command after it, so the desk doesn't move; the box clicks on, then goes back to sleep by itself.
+          static bool boot_checked = false;
+          if (!boot_checked && now >= 5000) {
+            boot_checked = true;
+            if (id(cur_raw) < 0 && id(move_dir) == 0 && !id(t10_sense).state) {
+              id(wake_only) = true;
+              id(quick_start) = false;
+              id(target_raw) = -1;
+              id(learn_dir) = 0;
+              id(move_dir) = 1;
+              id(move_start) = now;
+              id(press_raw) = -2;
+              id(stall_pos) = -1;
+              id(stall_since) = now;
+              ESP_LOGI("desk", "start-up: waking the box to read the height");
+            }
+          }
           // (times are compared as "now - start", which stays correct when millis() wraps after 49.7 days)
           if (id(tail_ms) != 0 && now - id(tail_start) >= id(tail_ms))
             id(tail_ms) = 0;
@@ -601,6 +649,11 @@ interval:
             } else if (!why && elapsed >= start_at) {
               static char preset_why[64];
               bool hold = false;
+              if (id(wake_only)) {
+                // start-up read: finished as soon as the box reports its height; never send a command
+                if (fresh) why = "height read at start-up";
+                else hold = true;
+              }
               if (id(press_raw) == -2 && id(target_raw) >= 0) {
                 // going to a height: wait until the box is reporting its height and the desk is standing still
                 // (it may be coasting from a move we just interrupted), then choose the direction
@@ -697,7 +750,8 @@ interval:
               cmd = 0x03;
               ESP_LOGI("desk", "stop (%s) at %d mm, status %d", why,
                        id(cur_raw) < 0 ? -1 : id(cur_raw) + 711, id(box_status));
-              id(last_stop).publish_state(why);
+              if (!id(wake_only)) id(last_stop).publish_state(why);  // the start-up read isn't a move
+              id(wake_only) = false;
             }
           } else if (id(tail_ms) == 0) {
             return;

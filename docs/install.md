@@ -14,7 +14,7 @@ You need Home Assistant with the **ESPHome Device Builder** add-on (or ESPHome o
    4. **Only then** reconnect the desk cable.
 5. After that, updates can go over Wi-Fi (**Install → Wirelessly**). A failed wireless update is harmless: the ESP32 keeps running its old firmware. If updates keep failing, use USB as in step 4.
 
-Check it's running: the log shows `desk controller firmware 1.3` after each boot.
+Check it's running: the log shows `desk controller firmware 1.4` after each boot.
 
 ### Why the processor runs at 80 MHz
 
@@ -61,6 +61,8 @@ Files in [`../enclosure/`](../enclosure/), printed in **PETG**, no supports:
 
 The **Desk height** sensor reports millimetres. To see inches or cm instead, open **Desk height**, then the **settings** (gear) icon, and change **Unit of measurement**. That only changes the display; nothing needs reinstalling.
 
+After a restart the control box is usually asleep and isn't reporting its height. About 5 seconds after starting, the board wakes the box once to read it, so you'll hear one relay click after each restart or firmware update. The desk doesn't move, and the box goes back to sleep by itself.
+
 ### Going to a height
 
 Set **Target height** and the desk drives there and stops. From an automation or script:
@@ -95,7 +97,7 @@ The desk's anti-collision stays active, but don't rely on it to protect a shelf 
 | Entity | Use |
 |---|---|
 | Raw position | mm above the desk's lowest position |
-| Collision sensitivity | The anti-collision level G-1 to G-4, read when the handset's sensitivity menu is used |
+| Collision sensitivity | The anti-collision level G-1 to G-4. The control box only reports it while the handset's sensitivity menu is open, so it's unknown until that menu has been opened once. After that it's remembered across restarts. |
 | Handset not responding | On when the handset is awake but has sent nothing for about 5 seconds. Unplug the handset and plug it back in. |
 | Uptime | Time since the ESP32 last started. If it drops back to near 0 without an update or restart, the ESP32 restarted by itself (usually a dip in the desk's 5 V). |
 | Desk status | 0 normally. 48 means the box reports **E04**: hold **Up + Down** on the handset and **don't let go** until the desk has gone to its lowest position and finished its rebound. Letting go early can damage the motor. |

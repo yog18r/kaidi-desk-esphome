@@ -17,7 +17,7 @@ USB and the desk cable must never be connected at the same time: the desk cable 
 
 | # | Check | Expected |
 |---|---|---|
-| B1 | Flash `desk.yaml` over USB | Log shows `desk controller firmware 1.3` |
+| B1 | Flash `desk.yaml` over USB | Log shows `desk controller firmware 1.4` |
 | B2 | **Unplug USB** before connecting the desk cable | |
 
 ## C. First power-up on the desk (handset unplugged)
@@ -35,6 +35,7 @@ USB and the desk cable must never be connected at the same time: the desk cable 
 | C9 | Set **Target height** about 100 mm away, a few times in each direction | The desk stops within a few mm of the target (the first moves may be further off). Last move result: `reached target (… mm)`. |
 | C10 | Set **Target height** within 4 mm of the current height | The desk doesn't move. Last move result: `already at target (… mm)`. |
 | C11 | Start **Up** from Home Assistant and press **Restart** partway | The desk stops immediately |
+| C12 | With the desk asleep, press **Restart** and wait about 10 s | One relay click and no movement. **Desk height** shows the height, **Handset button** shows `idle`, and **Desk moving** stays off. |
 
 ## D. With the handset (plug it into **HANDSET**)
 
