@@ -13,13 +13,12 @@ It plugs in between the desk's control box and its handset. The handset keeps wo
 |---|---|
 | **Desk height** | Live height while moving, updated up to 4 times a second |
 | **Up / Down / Stop** buttons | Move the desk from Home Assistant |
+| **Target height** | Set a height in mm and the desk drives there and stops, typically within a few millimetres |
 | **Preset 1–4** buttons | Go to the desk's own memory positions (the handset's 1–4). The control box drives there and stops exactly. |
 | **Handset button** | What the handset is doing right now: `up`, `down`, `preset 2`, `save preset 3 (917 mm)`, `set lower limit (754 mm)`… |
 | **Desk moving** | On while the desk is moving, from Home Assistant or the handset |
 | **Handset in use** | On while the handset is awake (its screen is lit) |
-| **Last move result** | Why the last move ended: `stopped`, `end of travel`, `reached preset 2 (815 mm)`, `handset took over`, `already at the top`/`bottom`, or a warning such as swapped cables |
-
-The four memory presets work directly from Home Assistant. Any other height ("go to 1050 mm") can be done as an automation using the height and Up/Down/Stop. An example is in [docs/install.md](docs/install.md).
+| **Last move result** | Why the last move ended: `stopped`, `end of travel`, `reached target (1054 mm)`, `reached preset 2 (815 mm)`, `handset took over`, `already at the top`/`bottom`, or a warning such as swapped cables |
 
 **The handset always wins.** If you press any handset button while Home Assistant is moving the desk, the board stops its move instantly and hands control back.
 

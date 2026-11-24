@@ -14,7 +14,7 @@ You need Home Assistant with the **ESPHome Device Builder** add-on (or ESPHome o
    4. **Only then** reconnect the desk cable.
 5. After that, updates can go over Wi-Fi (**Install → Wirelessly**). A failed wireless update is harmless: the ESP32 keeps running its old firmware. If updates keep failing, use USB as in step 4.
 
-Check it's running: the log shows `desk controller firmware 1.2` after each boot.
+Check it's running: the log shows `desk controller firmware 1.3` after each boot.
 
 ### Why the processor runs at 80 MHz
 
@@ -61,38 +61,19 @@ Files in [`../enclosure/`](../enclosure/), printed in **PETG**, no supports:
 
 The **Desk height** sensor reports millimetres. To see inches or cm instead, open **Desk height**, then the **settings** (gear) icon, and change **Unit of measurement**. That only changes the display; nothing needs reinstalling.
 
-### Example: a "standing height" script
+### Going to a height
 
-Moves the desk to a target height, then stops. Adjust the entity names to match your device. Give the target and the allowance in the unit your **Desk height** shows (mm unless you changed it).
+Set **Target height** and the desk drives there and stops. From an automation or script:
 
 ```yaml
-script:
-  desk_to_standing:
-    alias: Desk to standing height
-    mode: single
-    variables:
-      target: 1054          # same unit as sensor.desk1_desk_height (mm)
-      allowance: 22         # how far the desk travels after the script decides to stop
-    sequence:
-      - variables:
-          going_up: "{{ states('sensor.desk1_desk_height') | float(0) < target }}"
-      - action: button.press
-        target:
-          entity_id: "{{ 'button.desk1_up' if going_up else 'button.desk1_down' }}"
-      # wait for the move to register, so the "not moving" check below can't end the script at once
-      - wait_template: "{{ is_state('binary_sensor.desk1_desk_moving', 'on') }}"
-        timeout: "00:00:03"
-      - wait_template: >
-          {% set h = states('sensor.desk1_desk_height') | float(0) %}
-          {{ (going_up and h >= target - allowance) or (not going_up and h <= target + allowance)
-             or is_state('binary_sensor.desk1_desk_moving', 'off') }}
-        timeout: "00:00:30"
-      - action: button.press
-        target:
-          entity_id: button.desk1_stop
+action: number.set_value
+target:
+  entity_id: number.desk1_target_height   # adjust to match your device
+data:
+  value: 1054                             # mm
 ```
 
-The `allowance` makes the script press Stop early, because the desk keeps travelling for a moment afterwards. On the tested desk (KDDY094) that was 17–18 mm in both directions, and `22` lands within about ±5 mm of the target. It can't be tighter than that: the height reaches Home Assistant four times a second, and the desk moves about 9 mm between updates. Tune the number for your desk: if it stops high going up (or low going down), make it bigger. If the desk is already within the allowance of the target when the script starts, it stops straight away and the desk doesn't move. The firmware also stops by itself at the desk's top and bottom limits, after 30 s, or when the handset is used.
+The board lets go a little early, because the desk keeps travelling for a moment afterwards. It works out how early from the desk's speed, and corrects itself after every move, so the first few moves can be several millimetres off. On the tested desk (KDDY094) it then landed within about 3 mm. If the desk is already within 4 mm of the target it doesn't move, and **Last move result** shows `already at target`. A move also ends at the desk's top and bottom limits, after 30 s, or when the handset is used.
 
 For the four saved heights, the **Preset 1–4** buttons are simpler and exact: the control box drives to its stored height and stops by itself. Save presets on the handset as usual (**S**, then **1–4**).
 

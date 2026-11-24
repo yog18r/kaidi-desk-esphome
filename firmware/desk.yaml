@@ -3,8 +3,8 @@
 # One file per desk: copy this file (e.g. desk1.yaml, desk2.yaml) and change only the `substitutions` below.
 # Secrets (Wi-Fi, API key, fallback hotspot password) go in the ESPHome dashboard's Secrets - see secrets.example.yaml.
 #
-# Gives Home Assistant: desk height, Up / Down / Stop and Preset 1-4 buttons, "Desk moving", "Handset in use",
-# "Handset button" and "Last move result". Other target heights can be Home Assistant automations.
+# Gives Home Assistant: desk height, Up / Down / Stop and Preset 1-4 buttons, "Target height" (go to any height),
+# "Desk moving", "Handset in use", "Handset button" and "Last move result".
 # The handset keeps working normally and always wins: pressing any handset button stops a Home Assistant move.
 
 substitutions:
@@ -26,7 +26,14 @@ esphome:
         gpio_reset_pin(GPIO_NUM_19);
         gpio_set_direction(GPIO_NUM_19, GPIO_MODE_OUTPUT);
         gpio_set_level(GPIO_NUM_19, 0);
-    - logger.log: "desk controller firmware 1.2 (board V3: TX 17, RX 16, T10 drive 4, T10 sense 21, T7 switch 19, handset RX 18)"
+        // values kept across restarts: go back to the defaults if they're out of range
+        if (id(coast_up_ms) < 100 || id(coast_up_ms) > 700) id(coast_up_ms) = 300;
+        if (id(coast_down_ms) < 100 || id(coast_down_ms) > 700) id(coast_down_ms) = 300;
+        if (id(min_limit_raw) < 0 || id(max_limit_raw) > 460 || id(min_limit_raw) >= id(max_limit_raw)) {
+          id(min_limit_raw) = 0;
+          id(max_limit_raw) = 440;
+        }
+    - logger.log: "desk controller firmware 1.3 (board V3: TX 17, RX 16, T10 drive 4, T10 sense 21, T7 switch 19, handset RX 18)"
 
 esp32:
   # Any 38-pin ESP32-DevKitC-style board (2 x 19 pins at 25.4 mm, WROOM-32 / WROOM-32E) should work: the
@@ -159,6 +166,34 @@ globals:
   - id: handset_frame_ms
     type: uint32_t
     initial_value: '0'
+  # "Target height" moves: the height we're going to (raw, mm above minimum), -1 = not a target move
+  - id: target_raw
+    type: int
+    initial_value: '-1'
+  # how fast the desk is moving, in mm/s (+ up, - down), measured over the last ~0.2 s of height frames
+  - id: speed_mms
+    type: float
+    initial_value: '0'
+  # How long the desk keeps travelling after we let go, in ms. coast distance = speed x this time.
+  # Learned from each target move and kept across restarts, one value per direction.
+  - id: coast_up_ms
+    type: int
+    restore_value: true
+    initial_value: '300'
+  - id: coast_down_ms
+    type: int
+    restore_value: true
+    initial_value: '300'
+  # set when a target move lets go (direction, height and speed at that moment), cleared once the coast is measured
+  - id: learn_dir
+    type: int
+    initial_value: '0'
+  - id: learn_pos
+    type: int
+    initial_value: '0'
+  - id: learn_speed
+    type: float
+    initial_value: '0'
   # when we started sending the command, and the position at that moment
   - id: press_since
     type: uint32_t
@@ -198,12 +233,31 @@ script:
           // awake box would twitch the desk)
           id(quick_start) = id(t10_driven) || id(t10_sense).state;
           id(move_dir) = dir;
+          id(target_raw) = -1;
+          id(learn_dir) = 0;
           id(move_start) = millis();
           id(press_raw) = -2;
           id(stall_pos) = -1;
           id(stall_since) = millis();
           if (dir >= 6) ESP_LOGI("desk", "move to preset %d%s", dir - 5, id(quick_start) ? " (box already awake)" : "");
           else ESP_LOGI("desk", "move %s%s", dir == 1 ? "up" : "down", id(quick_start) ? " (box already awake)" : "");
+  # Go to a height (raw = mm above the 711 mm minimum). The direction is chosen from the last known height here,
+  # and checked again once the box is awake and reporting, just before the command starts.
+  - id: move_target
+    parameters:
+      raw: int
+    then:
+      - lambda: |-
+          int t = raw < 0 ? 0 : (raw > 460 ? 460 : raw);
+          id(quick_start) = id(t10_driven) || id(t10_sense).state;
+          id(target_raw) = t;
+          id(learn_dir) = 0;
+          id(move_dir) = (id(cur_raw) >= 0 && t < id(cur_raw)) ? 2 : 1;
+          id(move_start) = millis();
+          id(press_raw) = -2;
+          id(stall_pos) = -1;
+          id(stall_since) = millis();
+          ESP_LOGI("desk", "move to %d mm%s", t + 711, id(quick_start) ? " (box already awake)" : "");
   - id: stop_moving
     then:
       - lambda: |-
@@ -377,6 +431,17 @@ interval:
             }
             id(cur_raw) = found;
             id(last_height_ms) = millis();
+            // speed over the last 8 accepted frames (~0.2 s); 0 if that slot is empty or too old to compare
+            static int ring_pos[8];
+            static uint32_t ring_ms[8];
+            static uint8_t ring_i = 0;
+            uint32_t ring_now = millis();
+            uint32_t ring_dt = ring_now - ring_ms[ring_i];
+            id(speed_mms) = (ring_ms[ring_i] != 0 && ring_dt >= 100 && ring_dt <= 600)
+                              ? (found - ring_pos[ring_i]) * 1000.0f / ring_dt : 0.0f;
+            ring_pos[ring_i] = found;
+            ring_ms[ring_i] = ring_now;
+            ring_i = (ring_i + 1) & 7;
           }
 
   # Listen to the handset on GPIO18. Frames: 68 01 <cmd> b3 b4 sum 16. cmd 03 idle, 01 up, 02 down,
@@ -406,6 +471,8 @@ interval:
             int mm = buf[3] | (buf[4] << 8);
             int buf_b3 = buf[3], buf_b4 = buf[4];
             buf.clear();
+            if (cmd != 0x03)
+              id(learn_dir) = 0;  // the handset is moving the desk: don't measure a coast from this
 
             if (cmd != last_cmd) {
               last_cmd = cmd;
@@ -465,6 +532,24 @@ interval:
   - interval: 250ms
     then:
       - lambda: |-
+          // After a target move: once the desk has settled, measure how far it coasted and adjust the coast time.
+          if (id(learn_dir) != 0 && id(move_dir) == 0 && id(cur_raw) >= 0 &&
+              (id(height_changed_ms) == 0 || millis() - id(height_changed_ms) >= 1000)) {
+            int coast = abs(id(cur_raw) - id(learn_pos));
+            ESP_LOGI("desk", "target %d mm: settled at %d mm (coasted %d mm from %.0f mm/s)",
+                     id(target_raw) + 711, id(cur_raw) + 711, coast, id(learn_speed));
+            if (id(learn_speed) >= 15.0f && coast <= 40) {
+              int t = (int) (coast * 1000.0f / id(learn_speed));
+              t = t < 100 ? 100 : (t > 700 ? 700 : t);
+              int old = id(learn_dir) == 1 ? id(coast_up_ms) : id(coast_down_ms);
+              int upd = (old * 2 + t) / 3;
+              if (abs(upd - old) >= 10) {
+                if (id(learn_dir) == 1) id(coast_up_ms) = upd; else id(coast_down_ms) = upd;
+                ESP_LOGI("desk", "coast time %s now %d ms", id(learn_dir) == 1 ? "up" : "down", upd);
+              }
+            }
+            id(learn_dir) = 0;
+          }
           int pos = id(cur_raw);
           if (pos < 0 || pos == id(published_raw))
             return;
@@ -502,8 +587,10 @@ interval:
             bool fresh = id(cur_raw) >= 0 && now - id(last_height_ms) < 1000;
             const char *why = nullptr;
             bool handset = false;
-            if (id(box_status) > 0 && fresh)
+            if (id(box_status) == 0x30 && fresh)
               why = "desk reports an error - reset it by holding UP+DOWN on the handset";
+            else if (id(box_status) > 0 && fresh)
+              why = "desk isn't ready - check the handset's display";
             else if (elapsed > 30000)
               why = "timeout";
             else if (elapsed > 5000 && !fresh)
@@ -512,21 +599,41 @@ interval:
             if (!why && !id(quick_start) && elapsed >= 50 && elapsed < 150) {
               cmd = dir;  // wake tap
             } else if (!why && elapsed >= start_at) {
-              if (id(press_raw) == -2) {
+              static char preset_why[64];
+              bool hold = false;
+              if (id(press_raw) == -2 && id(target_raw) >= 0) {
+                // going to a height: wait until the box is reporting its height and the desk is standing still
+                // (it may be coasting from a move we just interrupted), then choose the direction
+                if (!fresh || fabsf(id(speed_mms)) > 3.0f) {
+                  hold = true;
+                } else if (abs(id(target_raw) - id(cur_raw)) <= 4) {
+                  snprintf(preset_why, sizeof(preset_why), "already at target (%d mm)", id(target_raw) + 711);
+                  why = preset_why;
+                } else {
+                  dir = id(target_raw) > id(cur_raw) ? 1 : 2;
+                  id(move_dir) = dir;
+                }
+              }
+              if (!why && !hold && id(press_raw) == -2) {
                 id(press_since) = now;
                 id(press_raw) = id(cur_raw);
                 id(move_peak) = id(cur_raw);
-                ESP_LOGI("desk", "sending %s %d from %d mm", dir >= 6 ? "preset" : (dir == 1 ? "up" : "down"),
-                         dir >= 6 ? dir - 5 : 0, id(cur_raw) < 0 ? -1 : id(cur_raw) + 711);
+                if (id(target_raw) >= 0)
+                  ESP_LOGI("desk", "sending %s towards %d mm from %d mm", dir == 1 ? "up" : "down",
+                           id(target_raw) + 711, id(cur_raw) + 711);
+                else
+                  ESP_LOGI("desk", "sending %s %d from %d mm", dir >= 6 ? "preset" : (dir == 1 ? "up" : "down"),
+                           dir >= 6 ? dir - 5 : 0, id(cur_raw) < 0 ? -1 : id(cur_raw) + 711);
               }
               int pos = id(cur_raw);
               if (pos >= 0)
                 id(move_peak) = id(move_peak) < 0 ? pos
                               : dir == 1 ? std::max(id(move_peak), pos) : std::min(id(move_peak), pos);
-              static char preset_why[64];
               // (presets can go either way, so the wrong-way check is for Up/Down only; the handset listener still
               // catches any handset button during a preset move)
-              if (dir <= 2 && pos >= 0 && id(move_peak) >= 0 &&
+              if (why || hold) {
+                // nothing to send yet: still waiting for the height, or already at the target
+              } else if (dir <= 2 && pos >= 0 && id(move_peak) >= 0 &&
                   (dir == 1 ? pos < id(move_peak) - 5 : pos > id(move_peak) + 5)) {
                 why = "desk moving the other way - handset in use";
                 handset = true;
@@ -556,6 +663,16 @@ interval:
                   why = "desk stopped moving (end of travel)";
                   if (dir == 1) id(max_limit_raw) = pos; else id(min_limit_raw) = pos;
                 }
+              }
+              else if (id(target_raw) >= 0 && pos >= 0 &&
+                       (dir == 1 ? pos + fabsf(id(speed_mms)) * id(coast_up_ms) / 1000.0f >= id(target_raw)
+                                 : pos - fabsf(id(speed_mms)) * id(coast_down_ms) / 1000.0f <= id(target_raw))) {
+                // close enough that the desk will coast the rest of the way: let go now
+                snprintf(preset_why, sizeof(preset_why), "reached target (%d mm)", id(target_raw) + 711);
+                why = preset_why;
+                id(learn_dir) = dir;
+                id(learn_pos) = pos;
+                id(learn_speed) = fabsf(id(speed_mms));
               }
               else
                 cmd = dir;
@@ -587,6 +704,25 @@ interval:
           }
           uint8_t frame[7] = {0x68, 0x01, cmd, 0x00, 0x00, (uint8_t) (0x01 + cmd), 0x16};
           id(desk_uart).write_array(frame, 7);
+
+# Go to any height: set this number and the desk drives there and stops. The firmware lets go a little early,
+# by the distance the desk coasts at its current speed, and learns that distance from each move.
+number:
+  - platform: template
+    name: "Target height"
+    id: target_height
+    icon: mdi:human-male-height
+    unit_of_measurement: "mm"
+    device_class: distance
+    mode: box
+    min_value: 711
+    max_value: 1171
+    step: 1
+    set_action:
+      - lambda: id(target_height).publish_state(x);
+      - script.execute:
+          id: move_target
+          raw: !lambda "return (int) x - 711;"
 
 button:
   - platform: template
