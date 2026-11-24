@@ -12,7 +12,7 @@ namespace esphome {
 namespace kaidi_desk_controller {
 
 static const char *const TAG = "desk";
-static const char *const FIRMWARE_VERSION = "2.0";
+static const char *const FIRMWARE_VERSION = "2.1";
 
 // The box reports mm above its lowest position; the desk height is that + 711 mm.
 static const int MIN_HEIGHT_MM = 711;
@@ -391,10 +391,11 @@ void KaidiDeskController::publish_height_() {
 void KaidiDeskController::send_() {
   uint32_t now = millis();
 
-  // Start-up read: 5 s after boot, if the box hasn't reported a height (it's asleep) and nobody is using the
-  // desk, wake it once so the height and status are known. This is the usual wake sequence with no command
-  // after it, so the desk doesn't move; the box clicks on, then goes back to sleep by itself.
-  if (!this->boot_checked_ && now >= 5000) {
+  // Start-up read: 15 s after boot, once Wi-Fi has settled, so the two loads on the 5 V supply do not overlap.
+  // If the box has not reported a height (it is asleep) and nobody is using the desk, wake it once so the
+  // height and status are known. This is the usual wake sequence with no command after it, so the desk does
+  // not move; the box clicks on, then goes back to sleep by itself.
+  if (!this->boot_checked_ && now >= 15000) {
     this->boot_checked_ = true;
     if (this->cur_raw_ < 0 && this->move_dir_ == 0 && !this->sense_pin_->digital_read()) {
       this->wake_only_ = true;

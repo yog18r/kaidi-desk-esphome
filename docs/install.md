@@ -14,7 +14,7 @@ You need Home Assistant with the **ESPHome Device Builder** add-on (or ESPHome o
    4. **Only then** reconnect the desk cable.
 5. After that, updates can go over Wi-Fi (**Install → Wirelessly**). A failed wireless update is harmless: the ESP32 keeps running its old firmware. If updates keep failing, use USB as in step 4.
 
-Check it's running: the log shows `Firmware: 2.0` under **Kaidi Desk Controller** each time you open it.
+Check it's running: the log shows `Firmware: 2.1` under **Kaidi Desk Controller** each time you open it.
 
 **Updates.** ESPHome keeps a downloaded copy of the component for a day, then fetches the latest version on the next build. To stay on a version you have tested, change `@main` in the `external_components:` line of `desk.yaml` to a commit ID.
 
@@ -63,7 +63,7 @@ Files in [`../enclosure/`](../enclosure/), printed in **PETG**, no supports:
 
 The **Desk height** sensor reports millimetres. To see inches or cm instead, open **Desk height**, then the **settings** (gear) icon, and change **Unit of measurement**. That only changes the display; nothing needs reinstalling.
 
-After a restart the control box is usually asleep and isn't reporting its height. About 5 seconds after starting, the board wakes the box once to read it, so you'll hear one relay click after each restart or firmware update. The desk doesn't move, and the box goes back to sleep by itself.
+After a restart the control box is usually asleep and isn't reporting its height. About 15 seconds after starting, the board wakes the box once to read it, so you'll hear one relay click after each restart or firmware update. The desk doesn't move, and the box goes back to sleep by itself.
 
 ### Going to a height
 
