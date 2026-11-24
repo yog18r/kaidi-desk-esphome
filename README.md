@@ -26,7 +26,7 @@ It plugs in between the desk's control box and its handset. The handset keeps wo
 
 > **Status:** V3 boards have been built and tested on a real desk (KDDY094, November 2026).
 
-**Known behaviour.** During testing there was an unexplained edge case: on a handful of occasions the control box clicked more than the usual once as it went back to sleep. No harmful behaviour was seen beyond that, and it couldn't be reproduced. On one of those occasions the handset had stopped responding with its screen dark, and unplugging and replugging the handset cleared it. Firmware 1.2 adds a **Handset not responding** sensor that turns on if this happens.
+**Known behaviour.** During testing there was an unexplained edge case: on a handful of occasions the control box clicked more than the usual once as it went back to sleep. No harmful behaviour was seen beyond that, and it couldn't be reproduced. On one of those occasions the handset had stopped responding with its screen dark, and unplugging and replugging the handset cleared it. The **Handset not responding** sensor turns on if this happens.
 
 ---
 

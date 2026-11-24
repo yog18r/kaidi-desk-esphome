@@ -22,7 +22,7 @@ Check it's running: the log shows `Firmware: 2.1` under **Kaidi Desk Controller*
 
 `cpu_frequency: 80MHz` **must stay**. The desk's 5 V supply is weak. At the default 240 MHz, the ESP32 reset during full-power Wi-Fi and roam scans, and wireless updates often failed partway. At 80 MHz, normal Wi-Fi settings (full power, roaming on) ran for hours without a restart, and wireless updates went through first time. The desk doesn't need more processing speed.
 
-If your ESP32 still restarts by itself (**Uptime** drops back near 0), lower the Wi-Fi load by adding these two lines under `wifi:` (they're in the firmware as a comment):
+If your ESP32 still restarts by itself (**Uptime** drops back near 0), lower the Wi-Fi load by adding these two lines under `wifi:` (they're in `desk.yaml` as a comment):
 
 ```yaml
   output_power: 8.5dB
