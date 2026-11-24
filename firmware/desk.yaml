@@ -18,9 +18,11 @@ esphome:
   friendly_name: ${friendly_name}
 
 external_components:
-  # To stay on a version you have tested, replace "main" with a release tag or a commit ID.
+  # refresh: 0s makes every build download the latest version of the component.
+  # To stay on a version you have tested, replace "main" with that version's full commit ID.
   - source: github://yog18r/kaidi-desk-esphome@main
     components: [kaidi_desk_controller]
+    refresh: 0s
 
 esp32:
   # Any 38-pin ESP32-DevKitC-style board (2 x 19 pins at 25.4 mm, WROOM-32 / WROOM-32E) should work: the

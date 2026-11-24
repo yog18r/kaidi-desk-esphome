@@ -16,7 +16,7 @@ You need Home Assistant with the **ESPHome Device Builder** add-on (or ESPHome o
 
 Check it's running: the log shows `Firmware: 2.1` under **Kaidi Desk Controller** each time you open it.
 
-**Updates.** ESPHome keeps a downloaded copy of the component for a day, then fetches the latest version on the next build. To stay on a version you have tested, change `@main` in the `external_components:` line of `desk.yaml` to a commit ID.
+**Updates.** Each build downloads the latest version of the component, so reinstalling updates the firmware. To stay on a version you have tested, change `@main` in the `external_components:` section of `desk.yaml` to that version's full commit ID.
 
 ### Why the processor runs at 80 MHz
 
