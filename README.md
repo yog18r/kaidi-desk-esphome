@@ -56,6 +56,7 @@ Quick check: the handset cable plug is wider than a network plug and has **10 co
 |---|---|
 | [hardware/](hardware/) | EasyEDA Pro project, Gerber files, BOM and pick-and-place for JLCPCB |
 | [firmware/](firmware/) | ESPHome configuration (`desk.yaml`) and an example secrets file |
+| [components/](components/) | The `kaidi_desk_controller` ESPHome component that `desk.yaml` uses |
 | [enclosure/](enclosure/) | 3D-printable box and lid (STL), plus the Python source that generates them |
 | [docs/](docs/) | Hardware notes, install guide, test checklist, desk protocol |
 

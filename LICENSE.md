@@ -8,7 +8,7 @@ This project is **free for non-commercial use**. **Commercial use needs a separa
 |---|---|---|
 | Hardware: the circuit board design, Gerbers, BOM and placement files, enclosure models (STL) | `hardware/`, `enclosure/*.stl` | [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)](https://creativecommons.org/licenses/by-nc-sa/4.0/) |
 | Documentation and photos | `README.md`, `docs/` | CC BY-NC-SA 4.0 (as above) |
-| Software: ESPHome firmware, enclosure generator scripts | `firmware/`, `enclosure/*.py` | [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) |
+| Software: ESPHome firmware and component, enclosure generator scripts | `firmware/`, `components/`, `enclosure/*.py` | [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) |
 
 The full legal texts are at the links above, and they are the terms that apply. This page is only a summary.
 

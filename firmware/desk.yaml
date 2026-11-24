@@ -1,10 +1,11 @@
-# Desk Controller V3 - ESPHome firmware for a Kaidi KDDY094 standing desk (RJ50 10P10C handset cable).
+# Desk Controller V3 - ESPHome configuration for a Kaidi KDDY094 standing desk (RJ50 10P10C handset cable).
 #
 # One file per desk: copy this file (e.g. desk1.yaml, desk2.yaml) and change only the `substitutions` below.
 # Secrets (Wi-Fi, API key, fallback hotspot password) go in the ESPHome dashboard's Secrets - see secrets.example.yaml.
 #
-# Gives Home Assistant: desk height, Up / Down / Stop and Preset 1-4 buttons, "Target height" (go to any height),
-# "Desk moving", "Handset in use", "Handset button" and "Last move result".
+# The desk logic lives in the `kaidi_desk_controller` component, which ESPHome downloads from this repository
+# when it builds. It gives Home Assistant: desk height, Up / Down / Stop and Preset 1-4 buttons, "Target height"
+# (go to any height), "Desk moving", "Handset in use", "Handset button" and "Last move result".
 # The handset keeps working normally and always wins: pressing any handset button stops a Home Assistant move.
 
 substitutions:
@@ -15,25 +16,11 @@ substitutions:
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
-  # Shows in the log after each boot, so you can tell which version is actually running.
-  on_boot:
-    - lambda: |-
-        // GPIO4 -> Q2/Q3: high raises T10 to ~4.5V while we use the desk, low leaves it alone.
-        gpio_reset_pin(GPIO_NUM_4);
-        gpio_set_direction(GPIO_NUM_4, GPIO_MODE_OUTPUT);
-        gpio_set_level(GPIO_NUM_4, 0);
-        // GPIO19 -> Q6: high opens the T7 switch (handset cut off from the box), low joins them.
-        gpio_reset_pin(GPIO_NUM_19);
-        gpio_set_direction(GPIO_NUM_19, GPIO_MODE_OUTPUT);
-        gpio_set_level(GPIO_NUM_19, 0);
-        // values kept across restarts: go back to the defaults if they're out of range
-        if (id(coast_up_ms) < 100 || id(coast_up_ms) > 700) id(coast_up_ms) = 300;
-        if (id(coast_down_ms) < 100 || id(coast_down_ms) > 700) id(coast_down_ms) = 300;
-        if (id(min_limit_raw) < 0 || id(max_limit_raw) > 460 || id(min_limit_raw) >= id(max_limit_raw)) {
-          id(min_limit_raw) = 0;
-          id(max_limit_raw) = 440;
-        }
-    - logger.log: "desk controller firmware 1.4 (board V3: TX 17, RX 16, T10 drive 4, T10 sense 21, T7 switch 19, handset RX 18)"
+
+external_components:
+  # To stay on a version you have tested, replace "main" with a release tag or a commit ID.
+  - source: github://yog18r/kaidi-desk-esphome@main
+    components: [kaidi_desk_controller]
 
 esp32:
   # Any 38-pin ESP32-DevKitC-style board (2 x 19 pins at 25.4 mm, WROOM-32 / WROOM-32E) should work: the
@@ -81,238 +68,41 @@ wifi:
 
 captive_portal:
 
-# How the board connects (see docs/hardware.md). RJ1 = DESK (cable to the control box), RJ2 = HANDSET.
-#   Power: T2 (5V) -> ME6211 regulator -> ESP 3V3 pin, T3 -> GND. NEVER have USB and the desk cable connected
-#          together: unplug the desk cable before plugging in USB, and unplug USB before reconnecting the desk.
-#   Height:   T8 -> R4 100k -> GPIO16 (RX), with R5 220k from GPIO16 to GND.
-#   Commands: GPIO17 (TX, inverted) -> R1 1k -> Q1 MMBT3904 base (R2 10k base-GND); emitter GND;
-#             collector -> 100R -> T7 (desk side). Q1 only ever pulls T7 low; R15 2.2k to 5V pulls it up.
-#   Awake:    GPIO4 -> R6 1k -> Q2 base; Q2 -> R8 -> Q3 S9012 (PNP from 5V) -> R10 1k -> T10. GPIO4 high = T10
-#             ~4.5V like an awake handset (needed to wake the box); low = T10 left to the handset/box.
-#   T10 sense: T10 -> R18 100k -> GPIO21, with R19 220k to GND. High while we aren't driving T10 = handset awake.
-#   T7 switch: desk T7 -> Q4/Q5 back-to-back 2N7002 -> handset T7. On by default (R12 10k gate-5V);
-#             GPIO19 high -> R13 1k -> Q6 pulls the gates low and cuts the handset off, so its idle frames can't
-#             collide with ours. If the ESP resets, the switch closes again and the handset just works.
-#   Handset listen: handset T7 -> R16 100k -> GPIO18 (RX), with R17 220k from GPIO18 to GND.
-# Frame format (both directions): 68 01 <b2> <b3> <b4> <sum> 16, where sum = 01+b2+b3+b4 (see docs/protocol.md).
+# The pins below match the V3 board (see docs/hardware.md). NEVER have USB and the desk cable connected
+# together: unplug the desk cable before plugging in USB, and unplug USB before reconnecting the desk.
 uart:
+  # To the control box: TX sends commands on T7 (inverted, because transistor Q1 inverts it again),
+  # RX reads the height on T8.
   - id: desk_uart
-    # Q1 inverts (GPIO high = T7 low), so the TX pin is inverted to cancel that out.
     tx_pin:
       number: GPIO17
       inverted: true
     rx_pin: GPIO16
     baud_rate: 9600
-    data_bits: 8
-    parity: NONE
-    stop_bits: 1
-  # Handset's side of the T7 switch, receive only. While the switch is open this hears only the handset.
+  # The handset's side of the T7 switch, receive only.
   - id: handset_uart
     rx_pin: GPIO18
     baud_rate: 9600
-    data_bits: 8
-    parity: NONE
-    stop_bits: 1
 
-globals:
-  - id: frame_buf
-    type: std::vector<uint8_t>
-  - id: handset_buf
-    type: std::vector<uint8_t>
-  # latest decoded position: mm above the lowest position (711mm / 28.0"), -1 = unknown
-  - id: cur_raw
-    type: int
-    initial_value: '-1'
-  - id: last_decoded
-    type: int
-    initial_value: '-1'
-  - id: last_height_ms
-    type: uint32_t
-    initial_value: '0'
-  # when the height last changed (0 = not since boot), so "Desk moving" also shows handset moves
-  - id: height_changed_ms
-    type: uint32_t
-    initial_value: '0'
-  - id: published_raw
-    type: int
-    initial_value: '-1'
-  # byte 2 of the box's frames: 0 normally, 48 (0x30) while locked out (E04)
-  - id: box_status
-    type: int
-    initial_value: '-1'
-  # whether GPIO4 is currently driving T10 high and GPIO19 has the T7 switch open
-  - id: t10_driven
-    type: bool
-    initial_value: 'false'
-  # true when a move starts while we're still holding the box awake (no wake tap needed)
-  - id: quick_start
-    type: bool
-    initial_value: 'false'
-  # movement: move_dir 0 idle / 1 up / 2 down / 6-9 go to preset 1-4 (the frame command we send)
-  - id: move_dir
-    type: int
-    initial_value: '0'
-  - id: move_start
-    type: uint32_t
-    initial_value: '0'
-  # the short run of idle frames after a move: when it started and how long it lasts (0 = not running)
-  - id: tail_start
-    type: uint32_t
-    initial_value: '0'
-  - id: tail_ms
-    type: uint32_t
-    initial_value: '0'
-  # when the handset last sent a valid frame (it sends one every ~14 ms while awake)
-  - id: handset_frame_ms
-    type: uint32_t
-    initial_value: '0'
-  # anti-collision level G-1..G-4 last seen in the handset's sensitivity menu (0 = never seen). Kept across
-  # restarts, because the box only reports it while that menu is open.
-  - id: sens_level
-    type: int
-    restore_value: true
-    initial_value: '0'
-  # true while the start-up read is running: the box is woken just to report its height, and nothing is moved
-  - id: wake_only
-    type: bool
-    initial_value: 'false'
-  # "Target height" moves: the height we're going to (raw, mm above minimum), -1 = not a target move
-  - id: target_raw
-    type: int
-    initial_value: '-1'
-  # how fast the desk is moving, in mm/s (+ up, - down), measured over the last ~0.2 s of height frames
-  - id: speed_mms
-    type: float
-    initial_value: '0'
-  # How long the desk keeps travelling after we let go, in ms. coast distance = speed x this time.
-  # Learned from each target move and kept across restarts, one value per direction.
-  - id: coast_up_ms
-    type: int
-    restore_value: true
-    initial_value: '300'
-  - id: coast_down_ms
-    type: int
-    restore_value: true
-    initial_value: '300'
-  # set when a target move lets go (direction, height and speed at that moment), cleared once the coast is measured
-  - id: learn_dir
-    type: int
-    initial_value: '0'
-  - id: learn_pos
-    type: int
-    initial_value: '0'
-  - id: learn_speed
-    type: float
-    initial_value: '0'
-  # when we started sending the command, and the position at that moment
-  - id: press_since
-    type: uint32_t
-    initial_value: '0'
-  - id: press_raw
-    type: int
-    initial_value: '-2'
-  # furthest position reached in the commanded direction (to spot the handset reversing the desk)
-  - id: move_peak
-    type: int
-    initial_value: '-1'
-  # Height limits (raw, mm above minimum), learned from end-of-travel stops and the handset's "set lower limit"
-  # (hold S, then hold 1 until -L-). Kept across restarts. Used to tell "already at the top/bottom" from a fault.
-  - id: min_limit_raw
-    type: int
-    restore_value: true
-    initial_value: '0'
-  - id: max_limit_raw
-    type: int
-    restore_value: true
-    initial_value: '440'
-  # last height seen during a move and when it last changed (to spot the desk stopping at its limit)
-  - id: stall_pos
-    type: int
-    initial_value: '-1'
-  - id: stall_since
-    type: uint32_t
-    initial_value: '0'
-
-script:
-  - id: move_manual
-    parameters:
-      dir: int
-    then:
-      - lambda: |-
-          // no wake tap if the box is already awake: we're holding T10, or the handset is (a tap into an
-          // awake box would twitch the desk)
-          id(quick_start) = id(t10_driven) || id(t10_sense).state;
-          id(move_dir) = dir;
-          id(wake_only) = false;
-          id(target_raw) = -1;
-          id(learn_dir) = 0;
-          id(move_start) = millis();
-          id(press_raw) = -2;
-          id(stall_pos) = -1;
-          id(stall_since) = millis();
-          if (dir >= 6) ESP_LOGI("desk", "move to preset %d%s", dir - 5, id(quick_start) ? " (box already awake)" : "");
-          else ESP_LOGI("desk", "move %s%s", dir == 1 ? "up" : "down", id(quick_start) ? " (box already awake)" : "");
-  # Go to a height (raw = mm above the 711 mm minimum). The direction is chosen from the last known height here,
-  # and checked again once the box is awake and reporting, just before the command starts.
-  - id: move_target
-    parameters:
-      raw: int
-    then:
-      - lambda: |-
-          int t = raw < 0 ? 0 : (raw > 460 ? 460 : raw);
-          id(quick_start) = id(t10_driven) || id(t10_sense).state;
-          id(target_raw) = t;
-          id(wake_only) = false;
-          id(learn_dir) = 0;
-          id(move_dir) = (id(cur_raw) >= 0 && t < id(cur_raw)) ? 2 : 1;
-          id(move_start) = millis();
-          id(press_raw) = -2;
-          id(stall_pos) = -1;
-          id(stall_since) = millis();
-          ESP_LOGI("desk", "move to %d mm%s", t + 711, id(quick_start) ? " (box already awake)" : "");
-  - id: stop_moving
-    then:
-      - lambda: |-
-          if (id(move_dir) != 0) {
-            id(move_dir) = 0;
-            id(tail_start) = millis();
-            id(tail_ms) = 500;
-            if (!id(wake_only)) id(last_stop).publish_state("stopped");
-            id(wake_only) = false;
-          }
-          ESP_LOGI("desk", "stop at %d mm", id(cur_raw) < 0 ? -1 : id(cur_raw) + 711);
+kaidi_desk_controller:
+  desk_uart_id: desk_uart
+  handset_uart_id: handset_uart
+  wake_pin: GPIO4              # high raises T10 while the board uses the desk
+  handset_switch_pin: GPIO19   # high cuts the handset off from the box while the board is sending
+  awake_sense_pin: GPIO21      # reads T10: high means the handset is awake
 
 sensor:
-  # The box reports mm above its 711mm minimum; the desk height is that + 711, in mm.
-  # Want inches or cm? Change the display unit in Home Assistant (Desk height > settings > Unit of
-  # measurement). No firmware change is needed.
-  - platform: template
-    name: "Desk height"
-    id: desk_height
-    unit_of_measurement: "mm"
-    device_class: distance
-    state_class: measurement
-    accuracy_decimals: 0
-  # bytes 3-4 as a 16-bit value: mm above the lowest position
-  - platform: template
-    name: "Raw position"
-    id: raw_position
-    entity_category: diagnostic
-    accuracy_decimals: 0
-  # byte 2 of the box's frames: 0 = normal. 48 (0x30) was reported while the handset showed E04
-  # ("control box malfunction", cleared by holding UP+DOWN until the desk resets to its minimum).
-  - platform: template
-    name: "Desk status"
-    id: desk_status
-    entity_category: diagnostic
-    accuracy_decimals: 0
-  # Anti-collision sensitivity G-1..G-4, as shown in the handset's sensitivity menu (hold S, press 3).
-  # Unknown until that menu has been opened once; remembered after that.
-  - platform: template
-    name: "Collision sensitivity"
-    id: collision_sensitivity
-    entity_category: diagnostic
-    accuracy_decimals: 0
+  - platform: kaidi_desk_controller
+    # Want inches or cm? Change the display unit in Home Assistant (Desk height > settings > Unit of
+    # measurement). No firmware change is needed.
+    height:
+      name: "Desk height"
+    raw_position:
+      name: "Raw position"
+    status:
+      name: "Desk status"
+    collision_sensitivity:
+      name: "Collision sensitivity"
   # Time since the ESP last started: if it drops back to ~0 unexpectedly, the ESP restarted.
   - platform: uptime
     name: "Uptime"
@@ -320,513 +110,42 @@ sensor:
     update_interval: 30s
 
 text_sensor:
-  # Why the last Home Assistant move ended: stopped, end of travel, handset took over, already at the top/bottom,
-  # or a warning such as swapped cables. Handy for automations and notifications.
-  - platform: template
-    name: "Last move result"
-    id: last_stop
-  # What the handset is sending right now: idle, up, down, preset N (height), or other (cmd N) e.g. the S button.
-  - platform: template
-    name: "Handset button"
-    id: handset_button
+  - platform: kaidi_desk_controller
+    last_move_result:
+      name: "Last move result"
+    handset_button:
+      name: "Handset button"
 
 binary_sensor:
-  - platform: template
-    name: "Desk moving"
-    # On while we're running a move, or the height changed in the last 1.2 s (handset moves and coasting).
-    # The start-up read doesn't count: it wakes the box without moving the desk.
-    lambda: |-
-      if (id(height_changed_ms) != 0 && millis() - id(height_changed_ms) >= 1200)
-        id(height_changed_ms) = 0;
-      return (id(move_dir) != 0 && !id(wake_only)) || id(height_changed_ms) != 0;
-  # T10 as read through R18/R19 (no internal pull: it would upset the divider)
-  - platform: gpio
-    id: t10_sense
-    internal: true
-    pin:
-      number: GPIO21
-      mode: INPUT
-  # On while T10 is high and we aren't the ones driving it, i.e. the handset is awake.
-  # The short delay skips the moment T10 is still falling after we let go.
-  - platform: template
-    name: "Handset in use"
-    id: handset_awake
-    lambda: return id(t10_sense).state && !id(t10_driven);
-    filters:
-      - delayed_on: 50ms
-  # On when the handset's awake line (T10) is high but the handset has sent nothing for about 5 s. An awake
-  # handset sends a frame every ~14 ms, so this means it has stopped responding: unplug it and plug it back in.
-  - platform: template
-    name: "Handset not responding"
-    device_class: problem
-    entity_category: diagnostic
-    lambda: |-
-      return id(t10_sense).state && !id(t10_driven) && millis() - id(handset_frame_ms) > 3000;
-    filters:
-      - delayed_on: 2s
-    on_press:
-      - logger.log:
-          level: WARN
-          format: "handset is awake but silent - unplug the handset and plug it back in"
+  - platform: kaidi_desk_controller
+    moving:
+      name: "Desk moving"
+    handset_in_use:
+      name: "Handset in use"
+    handset_not_responding:
+      name: "Handset not responding"
 
-# The box sends `68 01 00 HI LO SUM 16` on T8 every ~25ms while awake (live during movement)
-# and for ~12s after the handset sleeps. Junk bytes can sit between frame bytes, so on each
-# 0x16 we look back to the last "68 01" and pick out 4 bytes in order that form a valid frame:
-#   <status> <hi> <lo> <sum>, with sum = 01 + status + hi + lo and the value within desk travel.
-# A value is accepted when it's within 10 of the previous decode (the desk moves ~1-2 per frame).
-interval:
-  - interval: 10ms
-    then:
-      - lambda: |-
-          auto &buf = id(frame_buf);
-          uint8_t b;
-          while (id(desk_uart).available()) {
-            id(desk_uart).read_byte(&b);
-            buf.push_back(b);
-            if (buf.size() > 20)
-              buf.erase(buf.begin());
-            if (b != 0x16)
-              continue;
-
-            int end = buf.size() - 1;
-            int start = -1;
-            for (int i = end - 2; i >= 0; i--) {
-              if (buf[i] == 0x68 && buf[i + 1] == 0x01) {
-                start = i + 2;
-                break;
-              }
-            }
-            if (start < 0)
-              continue;
-            // Fewer than 4 bytes since "68 01": this 0x16 is a data byte, not the frame end (height 21/22 or
-            // 276/278 mm above minimum makes LO or SUM = 0x16). Wait for the real end instead of counting it as bad.
-            if (end - start < 4)
-              continue;
-
-            int found = -1, status = -1;
-            bool ambiguous = false;
-            for (int a = start; a < end; a++) {
-              for (int h = a + 1; h < end; h++) {
-                if (buf[h] > 0x01) continue;
-                for (int l = h + 1; l < end; l++) {
-                  int value = (buf[h] << 8) | buf[l];
-                  if (value > 460) continue;
-                  uint8_t sum = 0x01 + buf[a] + buf[h] + buf[l];
-                  for (int c = l + 1; c < end; c++) {
-                    if (buf[c] != sum) continue;
-                    if (found >= 0 && (found != value || status != buf[a])) ambiguous = true;
-                    found = value;
-                    status = buf[a];
-                  }
-                }
-              }
-            }
-            if (found < 0 || ambiguous)
-              continue;  // couldn't decode this frame: wait for the next one
-            buf.clear();
-            if (status != id(box_status)) {
-              id(box_status) = status;
-              id(desk_status).publish_state(status);
-            }
-            // While the handset is in a settings menu the box sends other statuses (e.g. 0x62 = 98) with the
-            // setting's value where the height normally is. Only 0 (normal) and 0x30 (E04) frames carry a height.
-            if (status == 0x62 && found >= 1 && found <= 4 && found != id(sens_level)) {
-              id(sens_level) = found;  // sensitivity menu: current level G-1..G-4
-              id(collision_sensitivity).publish_state(found);
-            }
-            if (status != 0 && status != 0x30)
-              continue;
-
-            int last = id(last_decoded);
-            id(last_decoded) = found;
-            if (last < 0 || abs(found - last) > 10)
-              continue;
-            if (id(cur_raw) >= 0 && found != id(cur_raw)) {
-              uint32_t t = millis();
-              id(height_changed_ms) = t ? t : 1;
-            }
-            id(cur_raw) = found;
-            id(last_height_ms) = millis();
-            // speed over the last 8 accepted frames (~0.2 s); 0 if that slot is empty or too old to compare
-            static int ring_pos[8];
-            static uint32_t ring_ms[8];
-            static uint8_t ring_i = 0;
-            uint32_t ring_now = millis();
-            uint32_t ring_dt = ring_now - ring_ms[ring_i];
-            id(speed_mms) = (ring_ms[ring_i] != 0 && ring_dt >= 100 && ring_dt <= 600)
-                              ? (found - ring_pos[ring_i]) * 1000.0f / ring_dt : 0.0f;
-            ring_pos[ring_i] = found;
-            ring_ms[ring_i] = ring_now;
-            ring_i = (ring_i + 1) & 7;
-          }
-
-  # Listen to the handset on GPIO18. Frames: 68 01 <cmd> b3 b4 sum 16. cmd 03 idle, 01 up, 02 down,
-  # 06/07/08/09 = memory preset 1-4. On this desk b3/b4 were 0 and the box drove to its own stored
-  # height; an older capture had the height in mm in b3 (low) b4 (high). S alone sends nothing; S then a number sends one
-  # "save" frame: S+1/2/3 = 0x0A/0B/0C, S+4 = 0x17 (all confirmed). Others: "other (cmd N)".
-  # - Always: report which handset button is in use to Home Assistant.
-  # - While we're moving the desk (T7 switch open): any button ends our move and joins the handset back to
-  #   the box, so a handset press always wins.
-  - interval: 10ms
-    then:
-      - lambda: |-
-          static int last_cmd = -1;
-          static bool first_run = true;
-          if (first_run) {
-            // just started: no handset frame yet means no button is pressed, and the anti-collision level is
-            // whatever the sensitivity menu last showed
-            first_run = false;
-            id(handset_button).publish_state("idle");
-            if (id(sens_level) >= 1 && id(sens_level) <= 4)
-              id(collision_sensitivity).publish_state(id(sens_level));
-          }
-          auto &buf = id(handset_buf);
-          uint8_t b;
-          while (id(handset_uart).available()) {
-            id(handset_uart).read_byte(&b);
-            buf.push_back(b);
-            if (buf.size() > 7)
-              buf.erase(buf.begin());
-            if (buf.size() < 7 || buf[0] != 0x68 || buf[1] != 0x01 || buf[6] != 0x16)
-              continue;
-            if (buf[5] != (uint8_t) (0x01 + buf[2] + buf[3] + buf[4]))
-              continue;
-            id(handset_frame_ms) = millis();
-            int cmd = buf[2];
-            int mm = buf[3] | (buf[4] << 8);
-            int buf_b3 = buf[3], buf_b4 = buf[4];
-            buf.clear();
-            if (cmd != 0x03)
-              id(learn_dir) = 0;  // the handset is moving the desk: don't measure a coast from this
-
-            if (cmd != last_cmd) {
-              last_cmd = cmd;
-              char what[48];
-              if (cmd == 0x03) snprintf(what, sizeof(what), "idle");
-              else if (cmd == 0x01) snprintf(what, sizeof(what), "up");
-              else if (cmd == 0x02) snprintf(what, sizeof(what), "down");
-              else if (cmd >= 0x06 && cmd <= 0x09) {
-                if (mm > 0) snprintf(what, sizeof(what), "preset %d (%d mm)", cmd - 5, mm);
-                else snprintf(what, sizeof(what), "preset %d", cmd - 5);
-              } else if ((cmd >= 0x0A && cmd <= 0x0C) || cmd == 0x17) {
-                // S then a preset number: save the current height. Confirmed: S+1 0x0A, S+2 0x0B, S+3 0x0C, S+4 0x17
-                // (seen twice). 0x0F was seen once, meaning unknown.
-                int n = cmd == 0x17 ? 4 : cmd - 0x09;
-                int h = id(cur_raw) < 0 ? -1 : id(cur_raw) + 711;
-                snprintf(what, sizeof(what), "save preset %d (%d mm)", n, h);
-              } else if (cmd == 0x0D) {
-                // hold S, then hold 1 until -L-: lower limit set at the current height
-                int h = id(cur_raw) < 0 ? -1 : id(cur_raw) + 711;
-                snprintf(what, sizeof(what), "set lower limit (%d mm)", h);
-                if (id(cur_raw) >= 0) id(min_limit_raw) = id(cur_raw);
-              } else if (cmd == 0x13) {
-                // hold S, then hold 3 until -L-: upper limit set at the current height
-                int h = id(cur_raw) < 0 ? -1 : id(cur_raw) + 711;
-                snprintf(what, sizeof(what), "set upper limit (%d mm)", h);
-                if (id(cur_raw) >= 0) id(max_limit_raw) = id(cur_raw);
-              } else if (cmd == 0x0E) {
-                // hold S, then hold 2 until -C-: limits cleared (seen as 0x14 then 0x0E)
-                snprintf(what, sizeof(what), "clear limits");
-                id(min_limit_raw) = 0;
-                id(max_limit_raw) = 440;
-              } else if (cmd == 0x62) {
-                snprintf(what, sizeof(what), "sensitivity menu");
-              } else if (cmd == 0x19) {
-                snprintf(what, sizeof(what), "set sensitivity G-%d", buf_b4);
-                if (buf_b4 >= 1 && buf_b4 <= 4 && buf_b4 != id(sens_level)) {
-                  id(sens_level) = buf_b4;
-                  id(collision_sensitivity).publish_state(buf_b4);
-                }
-              } else snprintf(what, sizeof(what), "other (cmd %d, %d %d)", cmd, buf_b3, buf_b4);
-              if (id(cur_raw) < 0) ESP_LOGI("desk", "handset: %s (height not known yet)", what);
-              else ESP_LOGI("desk", "handset: %s at %d mm", what, id(cur_raw) + 711);
-              id(handset_button).publish_state(what);
-            }
-
-            if (id(t10_driven) && cmd != 0x03) {
-              ESP_LOGI("desk", "handset button (cmd %d): handing back at %d mm", cmd,
-                       id(cur_raw) < 0 ? -1 : id(cur_raw) + 711);
-              id(move_dir) = 0;
-              id(tail_ms) = 0;
-              gpio_set_level(GPIO_NUM_4, 0);
-              gpio_set_level(GPIO_NUM_19, 0);
-              id(t10_driven) = false;
-              if (!id(wake_only)) id(last_stop).publish_state("handset took over");
-              id(wake_only) = false;
-            }
-          }
-
-  # Publish the height to Home Assistant at most 4 times a second (it changes every frame while moving),
-  # so Home Assistant automations can stop the desk near a target height.
-  - interval: 250ms
-    then:
-      - lambda: |-
-          // After a target move: once the desk has settled, measure how far it coasted and adjust the coast time.
-          if (id(learn_dir) != 0 && id(move_dir) == 0 && id(cur_raw) >= 0 &&
-              (id(height_changed_ms) == 0 || millis() - id(height_changed_ms) >= 1000)) {
-            int coast = abs(id(cur_raw) - id(learn_pos));
-            ESP_LOGI("desk", "target %d mm: settled at %d mm (coasted %d mm from %.0f mm/s)",
-                     id(target_raw) + 711, id(cur_raw) + 711, coast, id(learn_speed));
-            if (id(learn_speed) >= 15.0f && coast <= 40) {
-              int t = (int) (coast * 1000.0f / id(learn_speed));
-              t = t < 100 ? 100 : (t > 700 ? 700 : t);
-              int old = id(learn_dir) == 1 ? id(coast_up_ms) : id(coast_down_ms);
-              int upd = (old * 2 + t) / 3;
-              if (abs(upd - old) >= 10) {
-                if (id(learn_dir) == 1) id(coast_up_ms) = upd; else id(coast_down_ms) = upd;
-                ESP_LOGI("desk", "coast time %s now %d ms", id(learn_dir) == 1 ? "up" : "down", upd);
-              }
-            }
-            id(learn_dir) = 0;
-          }
-          int pos = id(cur_raw);
-          if (pos < 0 || pos == id(published_raw))
-            return;
-          id(published_raw) = pos;
-          id(raw_position).publish_state(pos);
-          id(desk_height).publish_state(pos + 711);
-
-  # The T7 switch is open whenever we hold T10, so the handset can't collide with these frames.
-  # Send handset frames on T7 every ~13ms, copying what the handset does when it wakes a sleeping box:
-  #   0-50ms idle, 50-150ms a short "tap" of the direction (wakes the box and switches its relay on),
-  #   150-1650ms idle, then 68 01 01|02 00 00 sum 16 until Stop, then 0.5s of idle frames so the box
-  #   sees the release, and then we go quiet so the handset can take over straight away. T10 is held
-  #   high throughout. If a new move starts within that 0.5s, the command starts after 200ms with no tap.
-  # Also stops if the desk reports an error, doesn't start moving, stops at its limit (height unchanged
-  # for 1.5s after it has moved), stops reporting, or after 30s.
-  # If the desk moves >5mm the wrong way, someone is using the handset: stop at once and skip the
-  # idle frames, so we don't talk over the handset.
-  - interval: 13ms
-    then:
-      - lambda: |-
-          uint32_t now = millis();
-          // Start-up read: 5 s after boot, if the box hasn't reported a height (it's asleep) and nobody is using
-          // the desk, wake it once so the height and status are known. This is the usual wake sequence with no
-          // command after it, so the desk doesn't move; the box clicks on, then goes back to sleep by itself.
-          static bool boot_checked = false;
-          if (!boot_checked && now >= 5000) {
-            boot_checked = true;
-            if (id(cur_raw) < 0 && id(move_dir) == 0 && !id(t10_sense).state) {
-              id(wake_only) = true;
-              id(quick_start) = false;
-              id(target_raw) = -1;
-              id(learn_dir) = 0;
-              id(move_dir) = 1;
-              id(move_start) = now;
-              id(press_raw) = -2;
-              id(stall_pos) = -1;
-              id(stall_since) = now;
-              ESP_LOGI("desk", "start-up: waking the box to read the height");
-            }
-          }
-          // (times are compared as "now - start", which stays correct when millis() wraps after 49.7 days)
-          if (id(tail_ms) != 0 && now - id(tail_start) >= id(tail_ms))
-            id(tail_ms) = 0;
-          bool want_t10 = id(move_dir) != 0 || id(tail_ms) != 0;
-          if (want_t10 != id(t10_driven)) {
-            gpio_set_level(GPIO_NUM_19, want_t10 ? 1 : 0);
-            gpio_set_level(GPIO_NUM_4, want_t10 ? 1 : 0);
-            id(t10_driven) = want_t10;
-          }
-          uint8_t cmd = 0x03;
-          int dir = id(move_dir);
-          if (dir != 0) {
-            uint32_t elapsed = now - id(move_start);
-            bool fresh = id(cur_raw) >= 0 && now - id(last_height_ms) < 1000;
-            const char *why = nullptr;
-            bool handset = false;
-            if (id(box_status) == 0x30 && fresh)
-              why = "desk reports an error - reset it by holding UP+DOWN on the handset";
-            else if (id(box_status) > 0 && fresh)
-              why = "desk isn't ready - check the handset's display";
-            else if (elapsed > 30000)
-              why = "timeout";
-            else if (elapsed > 5000 && !fresh)
-              why = "no height from the desk";
-            uint32_t start_at = id(quick_start) ? 200 : 1650;
-            if (!why && !id(quick_start) && elapsed >= 50 && elapsed < 150) {
-              cmd = dir;  // wake tap
-            } else if (!why && elapsed >= start_at) {
-              static char preset_why[64];
-              bool hold = false;
-              if (id(wake_only)) {
-                // start-up read: finished as soon as the box reports its height; never send a command
-                if (fresh) why = "height read at start-up";
-                else hold = true;
-              }
-              if (id(press_raw) == -2 && id(target_raw) >= 0) {
-                // going to a height: wait until the box is reporting its height and the desk is standing still
-                // (it may be coasting from a move we just interrupted), then choose the direction
-                if (!fresh || fabsf(id(speed_mms)) > 3.0f) {
-                  hold = true;
-                } else if (abs(id(target_raw) - id(cur_raw)) <= 4) {
-                  snprintf(preset_why, sizeof(preset_why), "already at target (%d mm)", id(target_raw) + 711);
-                  why = preset_why;
-                } else {
-                  dir = id(target_raw) > id(cur_raw) ? 1 : 2;
-                  id(move_dir) = dir;
-                }
-              }
-              if (!why && !hold && id(press_raw) == -2) {
-                id(press_since) = now;
-                id(press_raw) = id(cur_raw);
-                id(move_peak) = id(cur_raw);
-                if (id(target_raw) >= 0)
-                  ESP_LOGI("desk", "sending %s towards %d mm from %d mm", dir == 1 ? "up" : "down",
-                           id(target_raw) + 711, id(cur_raw) + 711);
-                else
-                  ESP_LOGI("desk", "sending %s %d from %d mm", dir >= 6 ? "preset" : (dir == 1 ? "up" : "down"),
-                           dir >= 6 ? dir - 5 : 0, id(cur_raw) < 0 ? -1 : id(cur_raw) + 711);
-              }
-              int pos = id(cur_raw);
-              if (pos >= 0)
-                id(move_peak) = id(move_peak) < 0 ? pos
-                              : dir == 1 ? std::max(id(move_peak), pos) : std::min(id(move_peak), pos);
-              // (presets can go either way, so the wrong-way check is for Up/Down only; the handset listener still
-              // catches any handset button during a preset move)
-              if (why || hold) {
-                // nothing to send yet: still waiting for the height, or already at the target
-              } else if (dir <= 2 && pos >= 0 && id(move_peak) >= 0 &&
-                  (dir == 1 ? pos < id(move_peak) - 5 : pos > id(move_peak) + 5)) {
-                why = "desk moving the other way - handset in use";
-                handset = true;
-              } else if ((pos < 0 || abs(pos - id(press_raw)) < 5) && now - id(press_since) > 2500) {
-                // already at a limit, or our commands aren't reaching the box. With the T7 switch open we only
-                // reach the box through the DESK jack, so swapped cables look exactly like this.
-                if (dir >= 6) {
-                  snprintf(preset_why, sizeof(preset_why), "already at preset %d (or it isn't saved)", dir - 5);
-                  why = preset_why;
-                } else if (pos >= 0 && dir == 1 && pos >= id(max_limit_raw) - 5)
-                  why = "already at the top";
-                else if (pos >= 0 && dir == 2 && pos <= id(min_limit_raw) + 5)
-                  why = "already at the bottom";
-                else
-                  why = "desk didn't respond - check the desk and handset cables aren't swapped";
-              }
-              else if (pos >= 0 && abs(pos - id(press_raw)) >= 5 && pos == id(stall_pos) &&
-                       now - id(stall_since) > 1500)
-              {
-                // it moved, then the height stopped changing: the box has hit its limit (or stopped itself)
-                if (dir >= 6) {
-                  // a preset move: the box drove to its stored height and stopped by itself
-                  int n = dir - 5, h = pos + 711;
-                  snprintf(preset_why, sizeof(preset_why), "reached preset %d (%d mm)", n, h);
-                  why = preset_why;
-                } else {
-                  why = "desk stopped moving (end of travel)";
-                  if (dir == 1) id(max_limit_raw) = pos; else id(min_limit_raw) = pos;
-                }
-              }
-              else if (id(target_raw) >= 0 && pos >= 0 &&
-                       (dir == 1 ? pos + fabsf(id(speed_mms)) * id(coast_up_ms) / 1000.0f >= id(target_raw)
-                                 : pos - fabsf(id(speed_mms)) * id(coast_down_ms) / 1000.0f <= id(target_raw))) {
-                // close enough that the desk will coast the rest of the way: let go now
-                snprintf(preset_why, sizeof(preset_why), "reached target (%d mm)", id(target_raw) + 711);
-                why = preset_why;
-                id(learn_dir) = dir;
-                id(learn_pos) = pos;
-                id(learn_speed) = fabsf(id(speed_mms));
-              }
-              else
-                cmd = dir;
-              if (pos != id(stall_pos)) {
-                id(stall_pos) = pos;
-                id(stall_since) = now;
-              }
-            }
-            if (why) {
-              id(move_dir) = 0;
-              id(tail_start) = now;
-              id(tail_ms) = handset ? 0 : 500;
-              if (handset) {
-                // let go of the wire straight away; the handset is driving the desk now
-                gpio_set_level(GPIO_NUM_4, 0);
-                gpio_set_level(GPIO_NUM_19, 0);
-                id(t10_driven) = false;
-                ESP_LOGI("desk", "stop (%s) at %d mm", why, id(cur_raw) + 711);
-                id(last_stop).publish_state(why);
-                return;
-              }
-              cmd = 0x03;
-              ESP_LOGI("desk", "stop (%s) at %d mm, status %d", why,
-                       id(cur_raw) < 0 ? -1 : id(cur_raw) + 711, id(box_status));
-              if (!id(wake_only)) id(last_stop).publish_state(why);  // the start-up read isn't a move
-              id(wake_only) = false;
-            }
-          } else if (id(tail_ms) == 0) {
-            return;
-          }
-          uint8_t frame[7] = {0x68, 0x01, cmd, 0x00, 0x00, (uint8_t) (0x01 + cmd), 0x16};
-          id(desk_uart).write_array(frame, 7);
-
-# Go to any height: set this number and the desk drives there and stops. The firmware lets go a little early,
-# by the distance the desk coasts at its current speed, and learns that distance from each move.
 number:
-  - platform: template
-    name: "Target height"
-    id: target_height
-    icon: mdi:human-male-height
-    unit_of_measurement: "mm"
-    device_class: distance
-    mode: box
-    min_value: 711
-    max_value: 1171
-    step: 1
-    set_action:
-      - lambda: id(target_height).publish_state(x);
-      - script.execute:
-          id: move_target
-          raw: !lambda "return (int) x - 711;"
+  - platform: kaidi_desk_controller
+    target_height:
+      name: "Target height"
+      mode: box
 
 button:
-  - platform: template
-    name: "Up"
-    icon: mdi:arrow-up
-    on_press:
-      - script.execute:
-          id: move_manual
-          dir: 1
-  - platform: template
-    name: "Down"
-    icon: mdi:arrow-down
-    on_press:
-      - script.execute:
-          id: move_manual
-          dir: 2
-  # Go to the box's stored memory positions (the handset's 1-4 buttons). The firmware sends the same "go to preset N"
-  # frames as the handset (06-09) until the desk stops by itself, so it works whichever one-touch mode the handset uses.
-  - platform: template
-    name: "Preset 1"
-    icon: mdi:numeric-1-box-outline
-    on_press:
-      - script.execute:
-          id: move_manual
-          dir: 6
-  - platform: template
-    name: "Preset 2"
-    icon: mdi:numeric-2-box-outline
-    on_press:
-      - script.execute:
-          id: move_manual
-          dir: 7
-  - platform: template
-    name: "Preset 3"
-    icon: mdi:numeric-3-box-outline
-    on_press:
-      - script.execute:
-          id: move_manual
-          dir: 8
-  - platform: template
-    name: "Preset 4"
-    icon: mdi:numeric-4-box-outline
-    on_press:
-      - script.execute:
-          id: move_manual
-          dir: 9
-  - platform: template
-    name: "Stop"
-    icon: mdi:stop
-    on_press:
-      - script.execute: stop_moving
+  - platform: kaidi_desk_controller
+    up:
+      name: "Up"
+    down:
+      name: "Down"
+    stop:
+      name: "Stop"
+    preset_1:
+      name: "Preset 1"
+    preset_2:
+      name: "Preset 2"
+    preset_3:
+      name: "Preset 3"
+    preset_4:
+      name: "Preset 4"
   - platform: restart
     name: "Restart"

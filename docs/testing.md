@@ -17,7 +17,7 @@ USB and the desk cable must never be connected at the same time: the desk cable 
 
 | # | Check | Expected |
 |---|---|---|
-| B1 | Flash `desk.yaml` over USB | Log shows `desk controller firmware 1.4` |
+| B1 | Flash `desk.yaml` over USB | Log shows `Firmware: 2.0` under **Kaidi Desk Controller** |
 | B2 | **Unplug USB** before connecting the desk cable | |
 
 ## C. First power-up on the desk (handset unplugged)

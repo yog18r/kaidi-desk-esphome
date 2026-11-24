@@ -5,7 +5,7 @@
 You need Home Assistant with the **ESPHome Device Builder** add-on (or ESPHome on a PC).
 
 1. In the ESPHome dashboard, open **Secrets** (top right) and add the entries from [`../firmware/secrets.example.yaml`](../firmware/secrets.example.yaml): your Wi-Fi details, an API key and a fallback hotspot password.
-2. Create a new device, choose to edit it, and replace everything with the contents of [`../firmware/desk.yaml`](../firmware/desk.yaml).
+2. Create a new device, choose to edit it, and replace everything with the contents of [`../firmware/desk.yaml`](../firmware/desk.yaml). That file is short: it sets the pins and names the entities. The desk logic is in the `kaidi_desk_controller` component, which ESPHome downloads from this repository when it builds, so the build needs internet access.
 3. For a second desk, uncomment its two secrets, then change the `substitutions` at the top (e.g. `name: desk2`, `friendly_name: Desk2`, `api_key: !secret desk2_api_key`) and the fallback hotspot's `password: !secret desk2_ap_password` under `wifi: ap:`. That password is read directly, not through substitutions, because a `$` in it would otherwise be taken as a variable.
 4. **First install: over USB.** **USB and the desk cable must never be connected at the same time.** To use USB: **unplug the desk cable first**, then plug in USB. When you've finished: **unplug USB first**, and only then reconnect the desk cable. The ESP32 can stay in the board for this.
    1. **Unplug the desk cable** from the board's DESK jack (or from the control box).
@@ -14,7 +14,9 @@ You need Home Assistant with the **ESPHome Device Builder** add-on (or ESPHome o
    4. **Only then** reconnect the desk cable.
 5. After that, updates can go over Wi-Fi (**Install → Wirelessly**). A failed wireless update is harmless: the ESP32 keeps running its old firmware. If updates keep failing, use USB as in step 4.
 
-Check it's running: the log shows `desk controller firmware 1.4` after each boot.
+Check it's running: the log shows `Firmware: 2.0` under **Kaidi Desk Controller** each time you open it.
+
+**Updates.** ESPHome keeps a downloaded copy of the component for a day, then fetches the latest version on the next build. To stay on a version you have tested, change `@main` in the `external_components:` line of `desk.yaml` to a commit ID.
 
 ### Why the processor runs at 80 MHz
 
